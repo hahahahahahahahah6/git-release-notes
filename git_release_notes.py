@@ -4,7 +4,7 @@ git-release-notes — release notes from `git log`, conventional-commit aware.
 
 Zero dependencies, works fully offline. Run inside any git repo:
 
-    git-release-notes [from] [to] [--verbose] [--json] [--version v1.2.0]
+    git-release-notes [from] [to] [--verbose] [--json] [--title v1.2.0]
 
 Defaults: `from` = most recent tag reachable from HEAD, `to` = HEAD.
 
@@ -57,7 +57,9 @@ _COLLAPSED_GROUP = "other"
 _SUBJECT_RE = re.compile(
     r"^(?P<type>[A-Za-z]+)(?P<scope>\([^()\r\n]*\))?(?P<bang>!)?\s*:\s*(?P<subject>.*)$"
 )
-_BREAKING_RE = re.compile(r"BREAKING[- ]CHANGE", re.IGNORECASE)
+# Only a footer line counts: "BREAKING CHANGE:" / "BREAKING-CHANGE:" at the
+# start of a line. A mere mention ("this is not a breaking change") does not.
+_BREAKING_RE = re.compile(r"(?m)^BREAKING[- ]CHANGE:", re.IGNORECASE)
 
 
 class GitError(RuntimeError):
@@ -96,6 +98,28 @@ def most_recent_tag():
         return None
 
 
+def previous_tag(tag):
+    """The nearest tag reachable before `tag`'s commit, or None.
+
+    Used when the range is empty because the tag sits on HEAD: fall back
+    to the previous release instead of printing a bare "No changes."
+    """
+    try:
+        return _run_git("describe", "--tags", "--abbrev=0", tag + "^").strip()
+    except GitError:
+        return None
+
+
+def _same_commit(a, b):
+    """True if two refs resolve to the same commit (fail-open: False)."""
+    try:
+        ra = _run_git("rev-parse", a + "^{commit}").strip()
+        rb = _run_git("rev-parse", b + "^{commit}").strip()
+        return bool(ra) and ra == rb
+    except GitError:
+        return False
+
+
 def parse_subject(subject):
     """Split a conventional-commit subject into (type, bang, clean_text)."""
     m = _SUBJECT_RE.match(subject)
@@ -115,6 +139,7 @@ def collect_commits(from_ref, to_ref):
     raw = _run_git(
         "log",
         "--no-decorate",
+        "--no-merges",
         "--format=%H%x1f%h%x1f%s%x1f%b%x1e",
         spec,
     )
@@ -161,10 +186,10 @@ def group_commits(commits, verbose=False):
     ]
 
 
-def render_markdown(groups, version=None, date=None):
+def render_markdown(groups, title=None, date=None):
     lines = []
-    if version:
-        head = f"# {version}"
+    if title:
+        head = f"# {title}"
         if date:
             head += f" — {date}"
         lines.append(head)
@@ -178,10 +203,10 @@ def render_markdown(groups, version=None, date=None):
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_json(groups, from_ref, to_ref, version=None, date=None):
+def render_json(groups, from_ref, to_ref, title=None, date=None):
     return json.dumps(
         {
-            "version": version,
+            "version": title,
             "date": date,
             "from": from_ref,
             "to": to_ref,
@@ -223,12 +248,21 @@ def main(argv=None):
     )
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument(
-        "--version",
-        dest="version",
+        "--title",
+        dest="title",
         default=None,
-        help='prepend a "# <version>" heading with today\'s date',
+        help='prepend a "# <title>" heading with today\'s date',
+    )
+    ap.add_argument(
+        "--version",
+        action="store_true",
+        help="print the tool version and exit",
     )
     args = ap.parse_args(argv)
+
+    if args.version:
+        print(__version__)
+        return 0
 
     ensure_git_repo()
 
@@ -239,19 +273,37 @@ def main(argv=None):
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
 
+    if not commits and from_ref and _same_commit(from_ref, args.to_ref):
+        # Most common trigger: you just tagged the release and ran with no
+        # args, so the default range is empty. Fall back to the previous tag
+        # instead of printing a bare "No changes."
+        prev = previous_tag(from_ref)
+        if prev:
+            print(
+                f"note: no commits since {from_ref}; "
+                f"showing changes since {prev}.",
+                file=sys.stderr,
+            )
+            from_ref = prev
+            try:
+                commits = collect_commits(from_ref, args.to_ref)
+            except GitError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(2)
+
     if not commits:
         print("No changes.")
         return 0
 
     groups = group_commits(commits, verbose=args.verbose)
-    date = _dt.date.today().isoformat() if args.version else None
+    date = _dt.date.today().isoformat() if args.title else None
 
     if args.json:
         sys.stdout.write(
-            render_json(groups, from_ref, args.to_ref, args.version, date)
+            render_json(groups, from_ref, args.to_ref, args.title, date)
         )
     else:
-        sys.stdout.write(render_markdown(groups, args.version, date))
+        sys.stdout.write(render_markdown(groups, args.title, date))
     return 0
 
 

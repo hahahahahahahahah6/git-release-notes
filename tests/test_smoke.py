@@ -31,6 +31,10 @@ class SmokeTest(unittest.TestCase):
         sh("git", "init", cwd=self.repo)
         sh("git", "config", "user.email", "test@example.com", cwd=self.repo)
         sh("git", "config", "user.name", "Test", cwd=self.repo)
+        out = subprocess.run(
+            ["git", "symbolic-ref", "--short", "HEAD"],
+            cwd=self.repo, capture_output=True, text=True)
+        self.branch = out.stdout.strip() or "master"
 
     def tearDown(self):
         shutil.rmtree(self.repo, ignore_errors=True)
@@ -115,13 +119,55 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(data["groups"][0]["entries"][0]["subject"], "one")
         self.assertRegex(data["groups"][0]["entries"][0]["sha"], r"^[0-9a-f]{7}$")
 
-    def test_version_heading(self):
+    def test_title_heading(self):
         self.commit("feat: one")
         self.tag("v0.1.0")
         self.commit("feat: two")
-        out = self.run_cli("v0.1.0", "HEAD", "--version", "v1.2.0")
+        out = self.run_cli("v0.1.0", "HEAD", "--title", "v1.2.0")
         self.assertEqual(out.returncode, 0)
         self.assertRegex(out.stdout, r"^# v1\.2\.0 — \d{4}-\d{2}-\d{2}\n")
+
+    def test_version_flag_prints_tool_version(self):
+        out = self.run_cli("--version")
+        self.assertEqual(out.returncode, 0)
+        self.assertEqual(out.stdout.strip(), "1.0.0")
+
+    def test_breaking_needs_footer_line(self):
+        # "breaking change" mentioned in prose is NOT a breaking change.
+        self.commit("feat: first")
+        self.tag("v0.1.0")
+        self.commit("fix: tweak", body="This is not a breaking change.")
+        self.commit("fix: other", body="note: BREAKING CHANGE mentioned mid-line")
+        self.commit("refactor: dash form", body="BREAKING-CHANGE: api removed")
+        out = self.run_cli("v0.1.0", "HEAD")
+        text = out.stdout
+        self.assertIn("## Breaking Changes", text)
+        self.assertIn("- dash form (", text)
+        self.assertNotIn("tweak", text.split("## Breaking Changes")[1].split("##")[0])
+        self.assertNotIn("other", text.split("## Breaking Changes")[1].split("##")[0])
+
+    def test_merge_commits_excluded(self):
+        self.commit("feat: base")
+        self.tag("v0.1.0")
+        sh("git", "checkout", "-qb", "side", cwd=self.repo)
+        self.commit("feat: side work")
+        sh("git", "checkout", "-q", self.branch, cwd=self.repo)
+        sh("git", "merge", "--no-ff", "-qm", "Merge branch 'side'", "side",
+           cwd=self.repo)
+        out = self.run_cli("v0.1.0", "HEAD")
+        text = out.stdout
+        self.assertIn("side work", text)
+        self.assertNotIn("Merge branch", text)
+
+    def test_empty_range_falls_back_to_previous_tag(self):
+        self.commit("feat: old")
+        self.tag("v0.1.0")
+        self.commit("feat: between")
+        self.tag("v0.2.0")  # tag sits on HEAD: default range is empty
+        out = self.run_cli()
+        self.assertEqual(out.returncode, 0)
+        self.assertIn("- between (", out.stdout)
+        self.assertIn("no commits since v0.2.0", out.stderr)
 
     def test_verbose_splits_other(self):
         self.commit("chore: scaffolding")

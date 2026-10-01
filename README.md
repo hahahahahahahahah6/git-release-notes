@@ -27,12 +27,14 @@ No pip, no virtualenv, no network. `git` itself is the only other thing you need
 ## Usage
 
 ```bash
-git-release-notes [from] [to] [--verbose] [--json] [--version v1.2.0]
+git-release-notes [from] [to] [--verbose] [--json] [--title v1.2.0]
 ```
 
 - `from` defaults to the most recent tag reachable from HEAD, `to` defaults to HEAD.
 - Must run inside a git repo (friendly error, exit 2, otherwise).
-- No commits in range → prints `No changes.`, exit 0.
+- No commits in range → prints `No changes.`, exit 0. (If the range is
+  empty only because the tag sits on HEAD — e.g. you just tagged — it
+  falls back to the previous tag instead.)
 
 Realistic example — you just merged a sprint's worth of work after `v1.3.0`:
 
@@ -63,7 +65,8 @@ Options:
 git-release-notes v1.2.0 v1.3.0          # explicit range
 git-release-notes --verbose              # docs/chore/etc get their own sections
 git-release-notes --json                 # machine-readable
-git-release-notes --version v1.4.0       # prepend "# v1.4.0 — 2026-10-01"
+git-release-notes --title v1.4.0         # prepend "# v1.4.0 — 2026-10-01"
+git-release-notes --version              # print the tool version
 git-release-notes | pbcopy               # pipe it into your release page
 ```
 
@@ -71,7 +74,9 @@ Conventional-commit parsing:
 
 - Grouped types: `feat`, `fix`, `docs`, `chore`, `refactor`, `perf`, `test`, `build`, `ci`
 - `feat(scope): subject` → subject with the prefix stripped
-- `!` marker or `BREAKING CHANGE:` footer → goes in **Breaking Changes** (first section)
+- `!` marker, or a `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer line →
+  goes in **Breaking Changes** (first section). A mere mention of
+  "breaking change" in prose does not count.
 - Everything else collapses into **Other changes** unless `--verbose` splits it out
 
 ## Differentiation
