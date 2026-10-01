@@ -98,9 +98,14 @@ class SmokeTest(unittest.TestCase):
         self.assertLess(text.index("## Breaking Changes"), text.index("## Features"))
 
     def test_empty_range_no_changes(self):
+        # A genuinely empty range between two different refs still prints
+        # "No changes." (single-tag-on-HEAD now falls back to full history;
+        # see test_single_tag_on_head_shows_full_history).
         self.commit("feat: something")
         self.tag("v1.0.0")
-        out = self.run_cli("v1.0.0", "HEAD")
+        self.commit("fix: later")
+        self.tag("v2.0.0")
+        out = self.run_cli("v2.0.0", "v1.0.0")  # reversed range: empty
         self.assertEqual(out.returncode, 0)
         self.assertEqual(out.stdout.strip(), "No changes.")
 
@@ -168,6 +173,17 @@ class SmokeTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0)
         self.assertIn("- between (", out.stdout)
         self.assertIn("no commits since v0.2.0", out.stderr)
+
+    def test_single_tag_on_head_shows_full_history(self):
+        self.commit("feat: first")
+        self.commit("fix: second")
+        self.tag("v1.0.0")  # only tag, sits on HEAD: no previous tag exists
+        out = self.run_cli()
+        self.assertEqual(out.returncode, 0)
+        self.assertNotIn("No changes.", out.stdout)
+        self.assertIn("showing full history", out.stderr)
+        self.assertIn("- first (", out.stdout)
+        self.assertIn("- second (", out.stdout)
 
     def test_verbose_splits_other(self):
         self.commit("chore: scaffolding")

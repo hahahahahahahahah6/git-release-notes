@@ -290,6 +290,20 @@ def main(argv=None):
             except GitError as exc:
                 print(f"error: {exc}", file=sys.stderr)
                 sys.exit(2)
+        else:
+            # Only one tag and it sits on HEAD: nothing older to fall back
+            # to, so show the full history instead of "No changes."
+            print(
+                f"note: no commits since {from_ref}; "
+                f"showing full history.",
+                file=sys.stderr,
+            )
+            from_ref = None
+            try:
+                commits = collect_commits(from_ref, args.to_ref)
+            except GitError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                sys.exit(2)
 
     if not commits:
         print("No changes.")
